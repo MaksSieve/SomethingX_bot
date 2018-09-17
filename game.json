@@ -1,0 +1,34 @@
+{
+  "name": "SpaceX",
+  "password": "qwerty",
+  "game_time": 1,
+  "state": 1,
+  "resources": [
+        {
+          "name": "iron",
+          "production": 1,
+          "min_price": 250,
+          "max_amount": 25,
+          "k":-1
+        },
+        {
+          "name": "wood",
+          "production": 2,
+          "min_price": 200,
+          "max_amount": 50,
+          "k":-3
+        }
+      ],
+  "points":[
+    {
+      "name": "Havana",
+      "base_resource":0,
+      "resources":[5,10]
+    },
+    {
+      "name": "Tortuga",
+      "base_resource":1,
+      "resources":[5,10]
+    }
+  ]
+}
