@@ -3,6 +3,8 @@
   "password": "qwerty",
   "game_time": 1,
   "state": 1,
+  "gov_pass": "qazwsx",
+  "adm_pass": "xswzaq",
   "resources": [
         {
           "name": "iron",
