@@ -33,7 +33,7 @@ def show_games(bot, update):
 
 def create_game(bot, update, args):
     if len(args) == 0: bot.send_message(chat_id=update.message.chat_id, text="Game needs a name! Use /creategame <name>.")
-    else:
+    else: pass
 
 
 

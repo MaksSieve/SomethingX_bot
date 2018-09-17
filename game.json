@@ -25,12 +25,18 @@
     {
       "name": "Havana",
       "base_resource":0,
-      "resources":[5,10]
+      "resources":[
+        {"amount":5, "price":720},
+        {"amount":10, "price":300}
+      ]
     },
     {
       "name": "Tortuga",
       "base_resource":1,
-      "resources":[5,10]
+      "resources":[
+        {"amount":5, "price":720},
+        {"amount":10, "price":300}
+      ]
     }
   ]
 }
