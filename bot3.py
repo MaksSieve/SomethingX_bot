@@ -5,7 +5,7 @@ import telebot
 from telebot import types
 from configparser import ConfigParser
 
-from util import DB, extract_arg, get_resources_on_point_string
+from util import DB, extract_arg, get_resources_on_point_string, MenuBuilder
 
 config = ConfigParser()
 config.read('config.cfg')
@@ -19,57 +19,45 @@ logger = logging.getLogger(__name__)
 with open('game.json') as file:
     game = json.loads(file.read())
 
-commands = {  # command description used in the "help" command
+common_commands = {  # command description used in the "help" command
     'start': 'Get used to the bot',
     'help': 'Gives you information about the available commands',
     'gov': 'Login as governor, requires a password!',
     'admin': ' Login as admin, requires a password!',
-    'logout': ' Logout',
 }
 
 db = DB(config.get('Common', 'DB_URL'))
 
-
-def team_menu():
-    menu = types.ReplyKeyboardMarkup()
-    connect_btn = types.KeyboardButton('/connect')
-    points_btn = types.KeyboardButton('/points')
-    me_btn = types.KeyboardButton('/me')
-    menu.add(connect_btn, points_btn, me_btn)
-    return menu
+menu_builder = MenuBuilder()
 
 
-def connected_team_menu(pid, tid):
-    menu = types.ReplyKeyboardMarkup()
-    menu.add(types.KeyboardButton(f'/prices {pid}'),
-             types.KeyboardButton('/trade'),
-             types.KeyboardButton(f'/connected {pid}'),
-             types.KeyboardButton(f'/disconnect'),
-             types.KeyboardButton(f'/me'))
-
-    return menu
-
-
-def approve_menu(pid, tid):
-    menu = types.InlineKeyboardMarkup()
-    row = menu.row()
-    row.add(types.InlineKeyboardButton(f"Approve",
-                                       callback_data=f"connect_resp_approved_{pid}_{tid}"))
-    row.add(types.InlineKeyboardButton(f"Decline",
-                                       callback_data=f"connect_resp_declined_{pid}_{tid}"))
-    return menu
+# deprecated
+#
+# @bot.message_handler(commands=['newteam'])
+# def new_team(m):
+#     args = extract_arg(m.text)
+#     cid = m.chat.id
+#     user = get_user(cid)
+#     if len(args) != 1:
+#         bot.send_message(chat_id=cid, text=f"Wrong number of arguments!\nUse /team <name> .")
+#     elif user['auth'] < 1:
+#         bot.send_message(chat_id=cid, text=f"You are not a governor or an admin!")
+#     elif len(list(db.Team.find({"name": cid}))) == 0:
+#         db.Team.insert_one({"id": db.Team.count(),
+#                             "name": args[0],
+#                             "money": 1000,
+#                             "storage": [0 for r in game['resources']]
+#                             })
+#         bot.send_message(cid, f"Team {args[0]} registered!")
+#     else:
+#         bot.send_message(cid, f"Team {args[0]} already registered!")
 
 
 @bot.message_handler(commands=["connect"])
 def connect(m):
     cid = m.chat.id
-    team_id = db.get_user(cid)['team_id']
-    connect_menu = types.InlineKeyboardMarkup()
-    points_row = connect_menu.row()
-    for point in game['points']:
-        cb_data = f"connect_req_{game['points'].index(point)}_{team_id}"
-        points_row.add(types.InlineKeyboardButton(f"{point['name']}", callback_data=cb_data))
-    bot.send_message(cid, "Choose point to connect:", reply_markup=connect_menu)
+    tid = db.get_user(cid)['team_id']
+    bot.send_message(cid, "Choose point to connect:", reply_markup=menu_builder.connect_menu(game, tid))
 
 
 @bot.callback_query_handler(func=lambda call: "connect_req" in call.data)
@@ -80,15 +68,9 @@ def connect_request_inline(call):
     tid = list(call.data.split("_"))[3]
     gov = db.get_governor_by_point(pid)
     bot.delete_message(cid, mid)
-    menu = types.InlineKeyboardMarkup()
-    row = menu.row()
-    row.add(types.InlineKeyboardButton(f"Approve",
-                                       callback_data=f"connect_resp_approved_{pid}_{tid}"))
-    row.add(types.InlineKeyboardButton(f"Decline",
-                                       callback_data=f"connect_resp_declined_{pid}_{tid}"))
     bot.send_message(gov['chat_id'],
                      f"Connection request by team {db.get_team(tid)['name']}.",
-                     reply_markup=menu)
+                     reply_markup=menu_builder.approve_connect_menu(pid, tid))
 
 
 @bot.callback_query_handler(func=lambda call: "connect_resp" in call.data)
@@ -104,18 +86,9 @@ def connect_response_inline(call):
         bot.delete_message(gov_cid, gov_mid)
         bot.send_message(gov_cid, "Connection approved.")
         bot.send_message(cap_cid, 'Your connection request approved!',
-                         reply_markup=connected_team_menu(pid=pid, tid=team_id))
+                         reply_markup=menu_builder.connected_team_menu(pid=pid))
     else:
         bot.send_message(cap_cid, 'Your connection request declined!')
-
-
-def get_price(point_id, res_id):
-    amount = game['points'][point_id]["resources"][res_id]
-    k = game["resources"][res_id]['k']
-    min_price = game["resources"][res_id]['min_price']
-    max_amount = game["resources"][res_id]['max_amount']
-    f = amount * k + min_price - max_amount * k
-    return max(f, min_price)
 
 
 @bot.message_handler(commands=['start'])
@@ -125,19 +98,19 @@ def start(m):
     if db.get_user(cid) is None:  # if user hasn't used the "/start" command yet:
         bot.send_message(cid, "Hello, stranger, let me scan you...")
         db.insert_user({"chat_id": cid, "auth": 0})
-        bot.send_message(cid, "Scanning complete, I know you now")
         command_help(m)  # show the new user the help page
+        bot.send_message(cid, "Scanning complete, I know you now", reply_markup=menu_builder.common_user_menu())
     else:
-        bot.send_message(cid, "I already know you, no need for me to scan you again!")
+        bot.send_message(cid, "I already know you, no need for me to scan you again!", reply_markup=menu_builder.common_user_menu())
 
 
 @bot.message_handler(commands=['help'])
 def command_help(m):
     cid = m.chat.id
     help_text = "The following commands are available: \n"
-    for key in commands:  # generate help text out of the commands dictionary defined at the top
+    for key in common_commands:  # generate help text out of the commands dictionary defined at the top
         help_text += "/" + key + ": "
-        help_text += commands[key] + "\n"
+        help_text += common_commands[key] + "\n"
     bot.send_message(cid, help_text)  # send the generated help page
 
 
@@ -157,7 +130,7 @@ def gov(m):
                          text=f"You are already logged in as governor of {game['points'][user['point_id']]['name']}")
     else:
         db.update_user(cid, {"auth": 1, "point_id": int(args[1])})
-        bot.send_message(chat_id=cid, text=f"You are successfully logged in as governor!")
+        bot.send_message(chat_id=cid, text=f"You are successfully logged in as governor!", reply_markup=menu_builder.governor_menu(int(args[1])))
 
 
 @bot.message_handler(commands=['admin'])
@@ -173,7 +146,7 @@ def admin(m):
         bot.send_message(chat_id=cid, text=f"You are already logged in as admin!")
     else:
         db.update_user(cid, {"auth": 2})
-        bot.send_message(chat_id=cid, text=f"You are successfully logged in as admin!")
+        bot.send_message(chat_id=cid, text=f"You are successfully logged in as admin!", reply_markup=menu_builder.admin_menu())
 
 
 @bot.message_handler(commands=['logout'])
@@ -181,7 +154,7 @@ def logout(m):
     cid = m.chat.id
     user = db.get_user(cid)
     if user['auth'] == 0:
-        bot.send_message(chat_id=cid, text=f"You are not logged in as character.")
+        bot.send_message(chat_id=cid, text=f"You are not logged in as character.", reply_markup=menu_builder.common_user_menu())
     else:
         db.update_user(cid, {"auth": 0})
         db.delete_user_fields(cid, {"point_id": "", "team_id": 0})
@@ -218,31 +191,9 @@ def points(m):
     msg = "id - name: base resource\n"
     points = game['points']
     for point in points:
-        msg = msg + f"{points.index(point)} - {point['name']}: " \
+        msg = msg + f"{point['name']}: " \
                     f"{game['resources'][point['base_resource']]['name']}\n"
     bot.send_message(chat_id=cid, text=msg)
-
-
-# deprecated
-#
-# @bot.message_handler(commands=['newteam'])
-# def new_team(m):
-#     args = extract_arg(m.text)
-#     cid = m.chat.id
-#     user = get_user(cid)
-#     if len(args) != 1:
-#         bot.send_message(chat_id=cid, text=f"Wrong number of arguments!\nUse /team <name> .")
-#     elif user['auth'] < 1:
-#         bot.send_message(chat_id=cid, text=f"You are not a governor or an admin!")
-#     elif len(list(db.Team.find({"name": cid}))) == 0:
-#         db.Team.insert_one({"id": db.Team.count(),
-#                             "name": args[0],
-#                             "money": 1000,
-#                             "storage": [0 for r in game['resources']]
-#                             })
-#         bot.send_message(cid, f"Team {args[0]} registered!")
-#     else:
-#         bot.send_message(cid, f"Team {args[0]} already registered!")
 
 
 @bot.message_handler(commands=['teams'])
@@ -256,24 +207,29 @@ def teams(m):
 
 @bot.message_handler(commands=['team'])
 def team(m):
-    args = extract_arg(m.text)
     cid = m.chat.id
-    if len(args) != 2:
-        bot.send_message(chat_id=cid, text=f"Wrong number of arguments!\nUse /team <id> <password>.")
+    bot.send_message(cid, "Select a team:", reply_markup=menu_builder.team_select_menu(list(db.get_teams()), cid))
+
+@bot.callback_query_handler(func=lambda call: "enter_team" in call.data)
+def enter_team(call):
+    cid = call.message.chat.id
+    mid = call.message.message_id
+    data = call.data.split("_")
+    if data[2] == "back":
+        db.update_user(cid, {"auth": 0})
+        bot.delete_message(cid, mid)
+        bot.send_message(cid, f"Welcome to {game['name']}!", reply_markup=menu_builder.common_user_menu())
     else:
-        team = db.get_team(args[0])
-        if not team:
-            bot.send_message(chat_id=cid, text=f"Wrong team id!")
-        elif team['pass'] != args[1]:
-            bot.send_message(chat_id=cid, text=f"Wrong password!")
-        elif db.team_has_captain(team['id']):
+        tid = int(data[2])
+        cid = int(data[3])
+        team = db.get_team(tid)
+        if db.team_has_captain(team['id']):
             bot.send_message(chat_id=cid, text=f"Some one already logged as a captain of team {team['name']}!\n"
                                                f"If you has not logged in tell Admin!")
         else:
-            db.update_user(cid, {"auth": 4, "team_id": team['id']})
-            bot.send_message(chat_id=cid, text=f"You are successfully logged in as a captain of team "
-                                               f"\"{team['name']}\"")
-            bot.send_message(cid, "Choose action", reply_markup=team_menu())
+            bot.delete_message(cid, mid)
+            db.update_user(cid, {"auth": 3, "team_id": tid})
+            bot.send_message(cid, "Enter password:", reply_markup=menu_builder.team_select_back_menu(cid))
 
 
 @bot.message_handler(commands=['disconnect'])
@@ -285,7 +241,7 @@ def diconnect(m):
     else:
         tid = db.get_team(user['team_id'])['id']
         db.update_team(tid, {"connected": -1})
-        bot.send_message(cid, f"You are disconnected from point.", reply_markup=team_menu())
+        bot.send_message(cid, f"You are disconnected from point.", reply_markup=menu_builder.team_menu())
 
 
 @bot.message_handler(commands=['me'])
@@ -312,7 +268,7 @@ def me(m):
                 res_id = team['storage'].index(res)
                 name = game['resources'][res_id]['name']
                 amount = res
-                msg += f"{res_id} - {name} - {amount}\n"
+                msg += f"{name}: {amount}\n"
     bot.send_message(chat_id=cid, text=msg)
 
 
@@ -352,18 +308,18 @@ def select_resource(call):
     if con_type == "back":
         db.delete_contract(con_id)
         bot.delete_message(cid, mid)
-        bot.send_message(cid, "Back to point menu.", reply_markup=connected_team_menu(contract['pid'], contract['tid']))
+        bot.send_message(cid, "Back to point menu.",
+                         reply_markup=menu_builder.connected_team_menu(contract['pid']))
     else:
         point = game['points'][contract['pid']]
 
         menu = types.InlineKeyboardMarkup()
         for res in point['resources']:
             res_id = point['resources'].index(res)
-
             menu.add(types.InlineKeyboardButton(f"{game['resources'][res_id]['name']}",
                                                 callback_data=f"trade1_{con_id}_{res_id}"))
 
-        menu.add(types.InlineKeyboardButton(f"back",callback_data=f"trade1_{con_id}_back"))
+        menu.add(types.InlineKeyboardButton(f"back", callback_data=f"trade1_{con_id}_back"))
         bot.edit_message_text("Select resource:", cid, mid, reply_markup=menu)
 
 
@@ -377,7 +333,8 @@ def select_amount(call):
     if data[2] == "back":
         db.delete_contract(con_id)
         bot.delete_message(cid, mid)
-        bot.send_message(cid, "Back to point menu.", reply_markup=connected_team_menu(contract['pid'], contract['tid']))
+        bot.send_message(cid, "Back to point menu.",
+                         reply_markup=menu_builder.connected_team_menu(contract['pid']))
     else:
         res_id = int(data[2])
         con_type = contract['type']
@@ -387,7 +344,7 @@ def select_amount(call):
             if t['storage'][res_id] == 0:
                 bot.answer_callback_query(call.id, f"You have not {game['resources'][res_id]['name']}!")
             else:
-                db.update_contract(con_id, {"rid":res_id, "status": "pending2", "price": price})
+                db.update_contract(con_id, {"rid": res_id, "status": "pending2", "price": price})
                 bot.delete_message(cid, mid)
                 bot.send_message(cid, "Enter amount")
         elif con_type == "buy":
@@ -395,9 +352,10 @@ def select_amount(call):
             if point['resources'][res_id]['amount'] == 0:
                 bot.answer_callback_query(call.id, f"Point has not {game['resources'][res_id]['name']}!")
             elif t['money'] < point['resources'][res_id]['price']:
-                bot.answer_callback_query(call.id, f"You have not enough money even for 1 unit of {game['resources'][res_id]['name']}!")
+                bot.answer_callback_query(call.id,
+                                          f"You have not enough money even for 1 unit of {game['resources'][res_id]['name']}!")
             else:
-                db.update_contract(con_id, {"rid":res_id, "status": "pending2",  "price": price})
+                db.update_contract(con_id, {"rid": res_id, "status": "pending2", "price": price})
                 bot.delete_message(cid, mid)
                 bot.send_message(cid, "Enter amount")
         else:
@@ -439,10 +397,10 @@ def check_amount(m):
 
                 elif con_type == "buy":
                     resources = game['points'][pid]['resources']
-                    #blocked = game['points'][pid]['blocked']
+                    # blocked = game['points'][pid]['blocked']
 
                     if resources[res_id]['amount'] >= amount:
-                        #blocked[res_id] += amount
+                        # blocked[res_id] += amount
                         if amount * contract['price'] <= t['money']:
                             db.update_contract(con_id, {"amount": amount, "status": "requested"})
                             bot.send_message(gov['chat_id'],
@@ -493,25 +451,27 @@ def trade_response(call):
         if con_type == "sell":
             storage = t['storage']
             storage[contract['rid']] -= contract['amount']
-            db.update_team(t['id'], {"storage": storage, "money": t['money'] + contract['amount']*contract['price']})
+            db.update_team(t['id'], {"storage": storage, "money": t['money'] + contract['amount'] * contract['price']})
             bot.send_message(cap['chat_id'], f"Your trade request is approved!\n"
-                                         f"Storage: -{contract['amount']} {game['resources'][contract['rid']]['name']}\n"
-                                         f"Money: + {contract['amount'] * contract['price']}",
-                             reply_markup=connected_team_menu(pid=t['connected'], tid=t['id']))
+                                             f"Storage: -{contract['amount']} {game['resources'][contract['rid']]['name']}\n"
+                                             f"Money: + {contract['amount'] * contract['price']}",
+                             reply_markup=menu_builder.connected_team_menu(pid=t['connected']))
             bot.send_message(cid, "Contract approved! Deal!")
         elif con_type == "buy":
             point['resources'][contract['rid']]['amount'] += contract['amount']
             team_storage = t['storage']
             team_storage[contract['rid']] += contract['amount']
-            db.update_team(t['id'], {"storage": team_storage, "money": t['money'] - contract['amount'] * contract['price']})
+            db.update_team(t['id'],
+                           {"storage": team_storage, "money": t['money'] - contract['amount'] * contract['price']})
             bot.send_message(cap['chat_id'], f"Your trade request is approved!\n"
-                                         f"Storage: +{contract['amount']} {game['resources'][contract['rid']]['name']}\n"
-                                         f"Money: - {contract['amount'] * contract['price']}",
-                             reply_markup=connected_team_menu(pid=t['connected'], tid=t['id']))
+                                             f"Storage: +{contract['amount']} {game['resources'][contract['rid']]['name']}\n"
+                                             f"Money: - {contract['amount'] * contract['price']}",
+                             reply_markup=menu_builder.connected_team_menu(pid=t['connected']))
             bot.delete_message(cid, mid)
             bot.send_message(cid, "Contract approved! Deal!")
         else:
             raise Exception(f'Unknown contract type. Contract: {con_id}')
+
 
 @bot.message_handler(commands=['prices'])
 def prices(m):
@@ -525,13 +485,28 @@ def connected(m):
     cid = m.chat.id
     args = extract_arg(m.text)
     connected_teams = db.get_teams()
-    msg = "id - name \n"
+    msg = ""
     for c_team in connected_teams:
         if c_team['connected'] == int(args[0]):
-            msg = msg + f"{c_team['id']} - " \
-                        f"{c_team['name']}\n"
+            msg = msg + f"{c_team['name']}\n"
 
     bot.send_message(chat_id=cid, text=msg)
+
+@bot.message_handler(func=lambda m: True)
+def check_password(m):
+    cid = m.chat.id
+    user = db.get_user(cid)
+    if user['auth'] == 3:
+        team = db.get_team(user['team_id'])
+        if m.text == team['pass']:
+            db.update_user(cid, {"auth": 4, "team_id": team['id']})
+            bot.send_message(chat_id=cid, text=f"You are successfully logged in as a captain of team "
+                                               f"\"{team['name']}\"")
+            bot.send_message(cid, "Choose action", reply_markup=menu_builder.team_menu())
+        else:
+            bot.send_message(cid, "Wrong password!", reply_markup=menu_builder.team_select_back_menu(cid))
+    else:
+        pass
 
 
 if __name__ == '__main__':

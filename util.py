@@ -1,14 +1,13 @@
 from datetime import datetime
 
 from pymongo import MongoClient
-
-from mongoengine import Document, IntField, ReferenceField
+from telebot import types
 
 
 class DB:
 
     def __init__(self, db_url):
-        self.client = MongoClient()
+        self.client = MongoClient(db_url)
         self.db = self.client.test_bot
 
     def get_user(self, cid):
@@ -117,6 +116,79 @@ class DB:
         return self.db.Contract.delete_one({"id": con_id})
 
 
+class MenuBuilder:
+
+    def team_menu(self):
+        menu = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        menu.add(types.KeyboardButton('/connect'),
+                 types.KeyboardButton('/points'),
+                 types.KeyboardButton('/me'),
+                 types.KeyboardButton('/logout'))
+        return menu
+
+    def connected_team_menu(self, pid):
+        menu = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        menu.add(types.KeyboardButton(f'/prices {pid}'),
+                 types.KeyboardButton('/trade'),
+                 types.KeyboardButton(f'/connected {pid}'),
+                 types.KeyboardButton(f'/disconnect'),
+                 types.KeyboardButton(f'/me'))
+        return menu
+
+    def common_user_menu(self):
+        menu = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        menu.add(types.KeyboardButton(f'/me'),
+                 types.KeyboardButton(f'/team'),
+                 types.KeyboardButton(f'/teams'),
+                 types.KeyboardButton(f'/points'))
+        return menu
+
+    def governor_menu(self, pid):
+        menu = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        menu.add(types.KeyboardButton(f'/me'),
+                 types.KeyboardButton(f'/teams'),
+                 types.KeyboardButton(f'/connected {pid}'),
+                 types.KeyboardButton(f'/prices {pid}'),
+                 types.KeyboardButton(f'/logout'))
+        return menu
+
+    def admin_menu(self):
+        menu = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        menu.add(types.KeyboardButton(f'/me'),
+                 types.KeyboardButton(f'/start_game'),
+                 types.KeyboardButton(f'/start_game'),
+                 types.KeyboardButton(f'/teams'),
+                 types.KeyboardButton(f'/points'),
+                 types.KeyboardButton(f'/logout'))
+        return menu
+
+    def connect_menu(self, game, tid):
+        menu = types.InlineKeyboardMarkup()
+        points_row = menu.row()
+        for point in game['points']:
+            cb_data = f"connect_req_{game['points'].index(point)}_{tid}"
+            points_row.add(types.InlineKeyboardButton(f"{point['name']}", callback_data=cb_data))
+        return menu
+
+    def approve_connect_menu(self, pid, tid):
+        menu = types.InlineKeyboardMarkup()
+        menu.add(types.InlineKeyboardButton(f"Approve", callback_data=f"connect_resp_approved_{pid}_{tid}"),
+                 types.InlineKeyboardButton(f"Decline", callback_data=f"connect_resp_declined_{pid}_{tid}"))
+        return menu
+
+    def team_select_menu(self, teams, cid):
+        menu = types.InlineKeyboardMarkup()
+        points_row = menu.row()
+        for team in teams:
+            points_row.add(types.InlineKeyboardButton(f"{team['name']}", callback_data=f"enter_team_{team['id']}_{cid}"))
+        points_row.add(types.InlineKeyboardButton(f"back", callback_data=f"enter_team_back"))
+        return menu
+
+    def team_select_back_menu(self, cid ):
+        menu = types.InlineKeyboardMarkup()
+        menu.add(types.InlineKeyboardButton(f"back", callback_data=f"enter_team_back"))
+        return menu
+
 def extract_arg(arg):
     return arg.split()[1:]
 
@@ -130,11 +202,10 @@ def create_dump(game, db):
 
 def get_resources_on_point_string(game, pid):
     resources = game['points'][pid]['resources']
-    msg = "id - name - amount - price\n"
+    msg = "name - amount - price\n"
     for res in resources:
         res_id = resources.index(res)
-        msg = msg + f"{res_id} - " \
-                    f"{game['resources'][res_id]['name']} - " \
+        msg = msg + f"{game['resources'][res_id]['name']} - " \
                     f"{res['amount']} - " \
                     f"{res['price']}\n"
     return msg
@@ -142,3 +213,12 @@ def get_resources_on_point_string(game, pid):
 
 def is_enough_resource_on_point(game, pid, rid, amount):
     return game['points'][pid]['resources'][rid][amount] <= amount
+
+
+def get_price(game, pid, rid):
+    amount = game['points'][pid]["resources"][rid]
+    k = game["resources"][rid]['k']
+    min_price = game["resources"][rid]['min_price']
+    max_amount = game["resources"][rid]['max_amount']
+    f = amount * k + min_price - max_amount * k
+    return max(f, min_price)
