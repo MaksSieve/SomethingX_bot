@@ -7,8 +7,8 @@ from mongoengine import Document, IntField, ReferenceField
 
 class DB:
 
-    def __init__(self):
-        self.client = MongoClient('storage.loadtest.m1.tinkoff.cloud:27017')
+    def __init__(self, db_url):
+        self.client = MongoClient()
         self.db = self.client.test_bot
 
     def get_user(self, cid):

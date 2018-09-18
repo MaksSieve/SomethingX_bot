@@ -1,15 +1,16 @@
 import json
 import logging
-from datetime import datetime
 
 import telebot
-from pymongo import MongoClient
 from telebot import types
+from configparser import ConfigParser
 
 from util import DB, extract_arg, get_resources_on_point_string
 
-API_TOKEN = "653139396:AAGzQcC1h8SYPes8tr6en_Yu-Lw6xEObZWU"
-bot = telebot.TeleBot(API_TOKEN)
+config = ConfigParser()
+config.read('config.cfg')
+
+bot = telebot.TeleBot(config.get('Common', 'API_TOKEN'))
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO,
                     filename="log.log")
@@ -26,7 +27,7 @@ commands = {  # command description used in the "help" command
     'logout': ' Logout',
 }
 
-db = DB()
+db = DB(config.get('Common', 'DB_URL'))
 
 
 def team_menu():
