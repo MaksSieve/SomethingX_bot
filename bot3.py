@@ -6,7 +6,7 @@ import telebot
 from pymongo import MongoClient
 from telebot import types
 
-from util import DB, extract_arg
+from util import DB, extract_arg, get_resources_on_point_string
 
 API_TOKEN = "653139396:AAGzQcC1h8SYPes8tr6en_Yu-Lw6xEObZWU"
 bot = telebot.TeleBot(API_TOKEN)
@@ -40,11 +40,11 @@ def team_menu():
 
 def connected_team_menu(pid, tid):
     menu = types.ReplyKeyboardMarkup()
-    prices_btn = types.KeyboardButton(f'/prices {pid}')
-    buy_btn = types.KeyboardButton('/trade')
-    connected_btn = types.KeyboardButton(f'/connected {pid}')
-    disconnect_btn = types.KeyboardButton(f'/disconnect')
-    menu.add(prices_btn, buy_btn, connected_btn, disconnect_btn)
+    menu.add(types.KeyboardButton(f'/prices {pid}'),
+             types.KeyboardButton('/trade'),
+             types.KeyboardButton(f'/connected {pid}'),
+             types.KeyboardButton(f'/disconnect'),
+             types.KeyboardButton(f'/me'))
 
     return menu
 
@@ -75,12 +75,19 @@ def connect(m):
 def connect_request_inline(call):
     cid = call.message.chat.id
     mid = call.message.message_id
-    point_id = list(call.data.split("_"))[2]
-    team_id = list(call.data.split("_"))[3]
-    gov = db.get_governor_by_point(point_id)
+    pid = list(call.data.split("_"))[2]
+    tid = list(call.data.split("_"))[3]
+    gov = db.get_governor_by_point(pid)
     bot.delete_message(cid, mid)
+    menu = types.InlineKeyboardMarkup()
+    row = menu.row()
+    row.add(types.InlineKeyboardButton(f"Approve",
+                                       callback_data=f"connect_resp_approved_{pid}_{tid}"))
+    row.add(types.InlineKeyboardButton(f"Decline",
+                                       callback_data=f"connect_resp_declined_{pid}_{tid}"))
     bot.send_message(gov['chat_id'],
-                     f"Connection request by team {db.get_team(team_id)['name']}.", reply_markup=approve_menu(point_id, team_id))
+                     f"Connection request by team {db.get_team(tid)['name']}.",
+                     reply_markup=menu)
 
 
 @bot.callback_query_handler(func=lambda call: "connect_resp" in call.data)
@@ -95,7 +102,8 @@ def connect_response_inline(call):
         db.update_team(team_id, {"connected": int(data[3])})
         bot.delete_message(gov_cid, gov_mid)
         bot.send_message(gov_cid, "Connection approved.")
-        bot.send_message(cap_cid, 'Your connection request approved!', reply_markup=connected_team_menu(pid=pid, tid=team_id))
+        bot.send_message(cap_cid, 'Your connection request approved!',
+                         reply_markup=connected_team_menu(pid=pid, tid=team_id))
     else:
         bot.send_message(cap_cid, 'Your connection request declined!')
 
@@ -266,6 +274,7 @@ def team(m):
                                                f"\"{team['name']}\"")
             bot.send_message(cid, "Choose action", reply_markup=team_menu())
 
+
 @bot.message_handler(commands=['disconnect'])
 def diconnect(m):
     cid = m.chat.id
@@ -277,6 +286,7 @@ def diconnect(m):
         db.update_team(tid, {"connected": -1})
         bot.send_message(cid, f"You are disconnected from point.", reply_markup=team_menu())
 
+
 @bot.message_handler(commands=['me'])
 def me(m):
     cid = m.chat.id
@@ -286,7 +296,8 @@ def me(m):
         msg += "You are common user"
     elif user['auth'] == 1:
         point = game['points'][user['point_id']]
-        msg += f"You are a governor.\nYour point: {point['name']}"
+        msg += f"You are a governor.\nYour point: {point['name']}\n"
+        msg += get_resources_on_point_string(game, user['point_id'])
     elif user['auth'] == 2:
         msg += f"You are an admin."
     elif user['auth'] == 4:
@@ -297,11 +308,12 @@ def me(m):
         else:
             msg += "In your storage:\n"
             for res in team['storage']:
-                team_id = team['storage'].index(res)
-                name = game['resources'][team_id]['name']
+                res_id = team['storage'].index(res)
+                name = game['resources'][res_id]['name']
                 amount = res
-                msg += f"{id} - {name} - {amount}\n"
+                msg += f"{res_id} - {name} - {amount}\n"
     bot.send_message(chat_id=cid, text=msg)
+
 
 @bot.message_handler(commands=['trade'])
 def start_trade(m):
@@ -310,125 +322,202 @@ def start_trade(m):
     if not user:
         bot.send_message(cid, "You are not a team captain.")
     else:
-        t = db.get_team(user['team'])
+        t = db.get_team(user['team_id'])
         if t['connected'] == -1:
             bot.send_message(cid, "You are not connected to a point.")
         else:
             pid = t['connected']
-            point = game['points'][pid]
+            con_id = len(list(db.get_contracts()))
+            db.create_contract({"tid": t['id'], "pid": pid, "status": "pending0", "id": con_id})
             bot.send_message(cid, "Welcome to market!")
-            prices(m)
-            select_resource(cid, t['id'], point)
+            bot.send_message(cid, get_resources_on_point_string(game, pid),
+                             reply_markup=types.ReplyKeyboardRemove(selective=False))
+            menu = types.InlineKeyboardMarkup()
+            menu.add(types.InlineKeyboardButton("Buy", callback_data=f"trade0_buy_{con_id}"))
+            menu.add(types.InlineKeyboardButton("Sell", callback_data=f"trade0_sell_{con_id}"))
+            menu.add(types.InlineKeyboardButton(f"back", callback_data=f"trade0_back_{con_id}"))
+            bot.send_message(cid, "Select action:", reply_markup=menu)
 
 
-def select_resource(cid, tid, point):
-    try:
+@bot.callback_query_handler(func=lambda call: "trade0" in call.data)
+def select_resource(call):
+    cid = call.message.chat.id
+    mid = call.message.message_id
+    data = call.data.split("_")
+    con_type = data[1]
+    con_id = int(data[2])
+    db.update_contract(con_id, {"type": con_type, "status": "pending1"})
+    contract = db.get_contract(con_id)
+    if con_type == "back":
+        db.delete_contract(con_id)
+        bot.delete_message(cid, mid)
+        bot.send_message(cid, "Back to point menu.", reply_markup=connected_team_menu(contract['pid'], contract['tid']))
+    else:
+        point = game['points'][contract['pid']]
+
         menu = types.InlineKeyboardMarkup()
         for res in point['resources']:
-            menu.add(types.InlineKeyboardButton(f"{game['resources'][res]['name']}",
-                                       callback_data=f"trade1_{tid}_{point['resources'].index(res)}"))
-        bot.send_message(cid, "Choose resource:", reply_markup=menu)
-    except Exception as e:
-        bot.send_message(cid, e)
+            res_id = point['resources'].index(res)
+
+            menu.add(types.InlineKeyboardButton(f"{game['resources'][res_id]['name']}",
+                                                callback_data=f"trade1_{con_id}_{res_id}"))
+
+        menu.add(types.InlineKeyboardButton(f"back",callback_data=f"trade1_{con_id}_back"))
+        bot.edit_message_text("Select resource:", cid, mid, reply_markup=menu)
+
 
 @bot.callback_query_handler(func=lambda call: "trade1" in call.data)
 def select_amount(call):
     cid = call.message.chat.id
     mid = call.message.message_id
     data = call.data.split("_")
-    tid = data[1]
-    rid = data[2]
-    t = db.get_team(tid)
-    if rid >= len(t['storage']):
+    con_id = int(data[1])
+    contract = db.get_contract(con_id)
+    if data[2] == "back":
+        db.delete_contract(con_id)
         bot.delete_message(cid, mid)
-        bot.send_message(cid, 'You have not this resource!')
+        bot.send_message(cid, "Back to point menu.", reply_markup=connected_team_menu(contract['pid'], contract['tid']))
+    else:
+        res_id = int(data[2])
+        con_type = contract['type']
+        t = db.get_team(contract['tid'])
+        price = game['points'][contract['pid']]['resources'][res_id]['price']
+        if con_type == "sell":
+            if t['storage'][res_id] == 0:
+                bot.answer_callback_query(call.id, f"You have not {game['resources'][res_id]['name']}!")
+            else:
+                db.update_contract(con_id, {"rid":res_id, "status": "pending2", "price": price})
+                bot.delete_message(cid, mid)
+                bot.send_message(cid, "Enter amount")
+        elif con_type == "buy":
+            point = game['points'][contract['pid']]
+            if point['resources'][res_id]['amount'] == 0:
+                bot.answer_callback_query(call.id, f"Point has not {game['resources'][res_id]['name']}!")
+            elif t['money'] < point['resources'][res_id]['price']:
+                bot.answer_callback_query(call.id, f"You have not enough money even for 1 unit of {game['resources'][res_id]['name']}!")
+            else:
+                db.update_contract(con_id, {"rid":res_id, "status": "pending2",  "price": price})
+                bot.delete_message(cid, mid)
+                bot.send_message(cid, "Enter amount")
+        else:
+            raise Exception(f'Unknown contract type. Contract: {con_id}')
 
 
+@bot.message_handler(func=lambda m: m.text.isdigit())
+def check_amount(m):
+    cid = m.chat.id
+    amount = int(m.text)
+    tid = db.is_captain(cid)
+    t = db.get_team(tid)
+    if t:
+        contracts = db.get_pending_contracts_by_team(tid, 2)
+        if contracts:
+            if len(contracts) == 1:
+                contract = contracts[0]
+                con_type = contract['type']
+                con_id = contract['id']
+                pid = contract['pid']
+                res_id = contract['rid']
+                gov = db.get_governor_by_point(pid)
 
-# @bot.message_handler(commands=['buy'])
-# # купить у команды (уменьшить ресурс у команды и дать денег)
-# def buy(m):
-#     args = extract_arg(m.text)
-#     cid = m.chat.id
-#     user = get_user(cid)
-#     if game['state'] != 1:
-#         bot.send_message(chat_id=cid, text=f"Game is not active!")
-#     elif len(args) != 3:
-#         bot.send_message(chat_id=cid, text=f"Wrong number of arguments!\nUse /trade <team> <resource> <amount>.")
-#     elif user['auth'] < 1:
-#         bot.send_message(chat_id=cid, text=f"You are not a governor, an admin or a team capitan!")
-#     elif bool(list(db.Team.find({"id": int(args[0])}))) and int(args[1]) < len(game['resources']):
-#         team = list(db.Team.find({"id": int(args[0])}))[0]
-#         point = game['points'][user['point_id']]
-#         res_id = int(args[1])
-#         amount = int(args[2])
-#         price = get_price(user['point_id'], res_id)
-#
-#         if team['storage'][res_id] - amount < 0:
-#             bot.send_message(chat_id=cid, text=f"Team has not enough resource!")
-#         else:
-#             team['storage'][res_id] = team['storage'][res_id] - amount
-#             team['money'] = team['money'] + amount * price
-#             point['resources'][res_id] = point['resources'][res_id] + amount
-#             db.Team.update_one({"id": int(args[0])}, {"$set": {"storage": team['storage'],
-#                                                                "money": team['money']}})
-#             bot.send_message(chat_id=cid, text=f"Deal!")
-#             dump = create_dump()
-#             logger.info(dump.__str__())
-#
-#     else:
-#         bot.send_message(chat_id=cid, text=f"Something wrong with parameters")
-#
-#
-# @bot.message_handler(commands=['sell'])
-# # продать команде (увеличить ресурс у команды и забрать денег)
-# def sell(m):
-#     args = extract_arg(m.text)
-#     cid = m.chat.id
-#     user = get_user(cid)
-#     if game['state'] != 1:
-#         bot.send_message(chat_id=cid, text=f"Game is not active!")
-#     elif len(args) != 3:
-#         bot.send_message(chat_id=cid, text=f"Wrong number of arguments!\nUse /trade <team> <resource> <amount>.")
-#     elif user['auth'] < 1:
-#         bot.send_message(chat_id=cid, text=f"You are not a governor!")
-#     elif bool(list(db.Team.find({"id": int(args[0])}))) and int(args[1]) < len(game['resources']):
-#         team = list(db.Team.find({"id": int(args[0])}))[0]
-#         point = game['points'][user['point_id']]
-#         res_id = int(args[1])
-#         amount = int(args[2])
-#         price = get_price(user['point_id'], res_id)
-#
-#         if amount * price > team['money']:
-#             bot.send_message(chat_id=cid, text=f"Team has not enough money!")
-#         elif point['resources'][res_id] - amount < 0:
-#             bot.send_message(chat_id=cid, text=f"There is not enough resource in the point!")
-#         else:
-#             team['storage'][res_id] = team['storage'][res_id] + amount
-#             team['money'] = team['money'] - amount * price
-#             point['resources'][res_id] = point['resources'][res_id] - amount
-#             db.Team.update_one({"id": int(args[0])}, {"$set": {"storage": team['storage'],
-#                                                                "money": team['money']}})
-#             bot.send_message(chat_id=cid, text=f"Deal!")
-#             dump = create_dump()
-#             logger.info(dump.__str__())
-#     else:
-#         bot.send_message(chat_id=cid, text=f"Something wrong with parameters")
+                menu = types.InlineKeyboardMarkup()
+                row = menu.row()
+                row.add(types.InlineKeyboardButton(f"Approve", callback_data=f"trade_resp_approved_{con_id}"))
+                row.add(types.InlineKeyboardButton(f"Decline", callback_data=f"trage_resp_declined_{con_id}"))
+                if con_type == "sell":
+                    if t['storage'][res_id] >= amount:
+                        db.update_contract(con_id, {"amount": amount, "status": "requested"})
+                        bot.send_message(gov['chat_id'],
+                                         f"Trade request by team {t['name']}.\n"
+                                         f"{con_type.upper()} {amount} of {game['resources'][res_id]['name']} "
+                                         f"with price {contract['price']}\n"
+                                         f"Total: {amount * contract['price']}",
+                                         reply_markup=menu)
+                    else:
+                        bot.reply_to(m, f"You have not enough {game['resources'][res_id]['name']}")
+
+                elif con_type == "buy":
+                    resources = game['points'][pid]['resources']
+                    #blocked = game['points'][pid]['blocked']
+
+                    if resources[res_id]['amount'] >= amount:
+                        #blocked[res_id] += amount
+                        if amount * contract['price'] <= t['money']:
+                            db.update_contract(con_id, {"amount": amount, "status": "requested"})
+                            bot.send_message(gov['chat_id'],
+                                             f"Trade request by team {t['name']}.\n"
+                                             f"{con_type.upper()} {amount} of {game['resources'][res_id]['name']} "
+                                             f"with price {contract['price']}\n"
+                                             f"Total: {amount * contract['price']}",
+                                             reply_markup=menu)
+                        else:
+                            bot.reply_to(m, f"You have no enough money\n"
+                                            f"You have: {t['money']}\n"
+                                            f"Total cost: {amount * contract['price']}")
+                    else:
+                        bot.reply_to(m, f"Point has not enough {game['resources'][res_id]['name']}")
+
+                else:
+                    raise Exception(f'Unknown contract type. Contract: {con_id}')
+
+            else:
+                raise Exception(f"More then 1 pending2 contracts with team {tid}")
+        else:
+            bot.send_message(cid, "Unknown command, try again or use /help")
+    else:
+        bot.send_message(cid, "Unknown command, try again or use /help")
+
+
+@bot.callback_query_handler(func=lambda call: "trade_resp" in call.data)
+def trade_response(call):
+    cid = call.message.chat.id
+    mid = call.message.message_id
+    data = call.data.split("_")
+    answer = data[2]
+    con_id = int(data[3])
+    contract = db.get_contract(con_id)
+    cap = db.get_captain_by_team(contract['tid'])
+    point = game['points'][contract['pid']]
+
+    if answer == "decline":
+        db.update_contract(con_id, {"status": "declined"})
+        bot.delete_message(cid, mid)
+        bot.send_message(cid, "Request declined.")
+        bot.send_message(cap['chat_id'], f"Your trade request is declined!\nReport to governor of {point['name']}.")
+        bot.send_message(cid, "Contract declined!")
+    else:
+        db.update_contract(con_id, {"status": "approved"})
+        con_type = contract['type']
+        t = db.get_team(contract['tid'])
+        if con_type == "sell":
+            storage = t['storage']
+            storage[contract['rid']] -= contract['amount']
+            db.update_team(t['id'], {"storage": storage, "money": t['money'] + contract['amount']*contract['price']})
+            bot.send_message(cap['chat_id'], f"Your trade request is approved!\n"
+                                         f"Storage: -{contract['amount']} {game['resources'][contract['rid']]['name']}\n"
+                                         f"Money: + {contract['amount'] * contract['price']}",
+                             reply_markup=connected_team_menu(pid=t['connected'], tid=t['id']))
+            bot.send_message(cid, "Contract approved! Deal!")
+        elif con_type == "buy":
+            point['resources'][contract['rid']]['amount'] += contract['amount']
+            team_storage = t['storage']
+            team_storage[contract['rid']] += contract['amount']
+            db.update_team(t['id'], {"storage": team_storage, "money": t['money'] - contract['amount'] * contract['price']})
+            bot.send_message(cap['chat_id'], f"Your trade request is approved!\n"
+                                         f"Storage: +{contract['amount']} {game['resources'][contract['rid']]['name']}\n"
+                                         f"Money: - {contract['amount'] * contract['price']}",
+                             reply_markup=connected_team_menu(pid=t['connected'], tid=t['id']))
+            bot.delete_message(cid, mid)
+            bot.send_message(cid, "Contract approved! Deal!")
+        else:
+            raise Exception(f'Unknown contract type. Contract: {con_id}')
 
 @bot.message_handler(commands=['prices'])
 def prices(m):
     cid = m.chat.id
     args = extract_arg(m.text)
-    resources = game['points'][int(args[0])]['resources']
-    msg = "id - name - amount - price\n"
-    for res in resources:
-        res_id = resources.index(res)
-        msg = msg + f"{res_id} - " \
-                    f"{game['resources'][res_id]['name']} - " \
-                    f"{res['amount']} - " \
-                    f"{get_price(int(args[0]), res_id)}\n"
+    bot.send_message(chat_id=cid, text=get_resources_on_point_string(game, int(args[0])))
 
-    bot.send_message(chat_id=cid, text=msg)
 
 @bot.message_handler(commands=['connected'])
 def connected(m):
@@ -445,4 +534,12 @@ def connected(m):
 
 
 if __name__ == '__main__':
-    bot.polling()
+    try:
+        bot.polling()
+    except Exception as e:
+        admins = db.get_admins()
+        if bool(admins):
+            for admin in admins:
+                bot.send_message(admin['chat_id'], f"ERROR:\n{e}")
+        else:
+            pass
