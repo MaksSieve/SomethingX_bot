@@ -68,9 +68,14 @@ def connect_request_inline(call):
     tid = list(call.data.split("_"))[3]
     gov = db.get_governor_by_point(pid)
     bot.delete_message(cid, mid)
-    bot.send_message(gov['chat_id'],
-                     f"Connection request by team {db.get_team(tid)['name']}.",
-                     reply_markup=menu_builder.approve_connect_menu(pid, tid))
+    if bool(gov):
+        bot.send_message(gov['chat_id'],
+                         f"Connection request by team {db.get_team(tid)['name']}.",
+                         reply_markup=menu_builder.approve_connect_menu(pid, tid))
+    else:
+        bot.send_message(cid,
+                         "There is no governor for this point(",
+                         reply_markup=menu_builder.team_select_back_menu(cid))
 
 
 @bot.callback_query_handler(func=lambda call: "connect_resp" in call.data)
@@ -209,6 +214,7 @@ def teams(m):
 def team(m):
     cid = m.chat.id
     bot.send_message(cid, "Select a team:", reply_markup=menu_builder.team_select_menu(list(db.get_teams()), cid))
+
 
 @bot.callback_query_handler(func=lambda call: "enter_team" in call.data)
 def enter_team(call):
@@ -492,6 +498,7 @@ def connected(m):
 
     bot.send_message(chat_id=cid, text=msg)
 
+
 @bot.message_handler(func=lambda m: True)
 def check_password(m):
     cid = m.chat.id
@@ -511,11 +518,10 @@ def check_password(m):
 
 if __name__ == '__main__':
     try:
+        bot.stop_polling()
         bot.polling()
     except Exception as e:
         admins = db.get_admins()
         if bool(admins):
             for admin in admins:
                 bot.send_message(admin['chat_id'], f"ERROR:\n{e}")
-        else:
-            pass

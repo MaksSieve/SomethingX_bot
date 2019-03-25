@@ -28,7 +28,8 @@
       "resources":[
         {"amount":5, "price":720},
         {"amount":10, "price":300}
-      ]
+      ],
+      "blocked":[0,0]
     },
     {
       "name": "Tortuga",

@@ -8,7 +8,7 @@ class DB:
 
     def __init__(self, db_url):
         self.client = MongoClient(db_url)
-        self.db = self.client.test_bot
+        self.db = self.client.something_x
 
     def get_user(self, cid):
         users = list(self.db.User.find({"chat_id": cid}))
@@ -155,7 +155,7 @@ class MenuBuilder:
     def admin_menu(self):
         menu = types.ReplyKeyboardMarkup(resize_keyboard=True)
         menu.add(types.KeyboardButton(f'/me'),
-                 types.KeyboardButton(f'/start_game'),
+                 types.KeyboardButton(f'/register_team'),
                  types.KeyboardButton(f'/start_game'),
                  types.KeyboardButton(f'/teams'),
                  types.KeyboardButton(f'/points'),
